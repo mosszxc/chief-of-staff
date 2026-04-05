@@ -21,18 +21,48 @@ from bot.scheduler.drift import check_drift
 
 load_dotenv()
 
-# Setup logging
+# Setup logging — structured, with rotation
 LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+from logging.handlers import RotatingFileHandler
+
+_log_format = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+
+# Main log: all messages, 5MB rotation, keep 7 files
+_main_handler = RotatingFileHandler(
+    LOG_DIR / "cos.log", maxBytes=5_000_000, backupCount=7, encoding="utf-8"
+)
+_main_handler.setFormatter(logging.Formatter(_log_format))
+
+# Error log: only WARNING+, separate file for quick debugging
+_error_handler = RotatingFileHandler(
+    LOG_DIR / "errors.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+)
+_error_handler.setLevel(logging.WARNING)
+_error_handler.setFormatter(logging.Formatter(_log_format))
+
+# Claude calls log: track every LLM call (recipe, model, time, tokens)
+_claude_handler = RotatingFileHandler(
+    LOG_DIR / "claude.log", maxBytes=5_000_000, backupCount=7, encoding="utf-8"
+)
+_claude_handler.setFormatter(logging.Formatter(_log_format))
+logging.getLogger("cos.claude").addHandler(_claude_handler)
+
+# Console: INFO
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(logging.Formatter(_log_format))
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LOG_DIR / "cos.log", encoding="utf-8"),
-    ],
+    handlers=[_console_handler, _main_handler, _error_handler],
 )
+
+# Reduce noise from libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("aiogram.event").setLevel(logging.WARNING)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
+
 logger = logging.getLogger("cos")
 
 

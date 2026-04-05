@@ -114,11 +114,17 @@ async def on_voice(message: Message, state: FSMContext):
 
         # 4. Route through the same pipeline as text messages
         from bot.handlers.messages import process_text
+        logger.info(f"Routing voice text to process_text: '{text[:50]}'")
         await process_text(text, message, state)
+        logger.info("Voice text routed successfully")
 
     except Exception as e:
         logger.error("Voice processing failed: %s", e, exc_info=True)
-        await message.reply("Не удалось распознать речь")
+        # Don't hide errors behind "не удалось распознать" if transcription succeeded
+        if text:
+            await message.reply(f"Распознал: {text}\nНо ошибка при обработке: {e}")
+        else:
+            await message.reply("Не удалось распознать речь")
 
     finally:
         # Clean up .ogg file
