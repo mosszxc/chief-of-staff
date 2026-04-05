@@ -85,6 +85,7 @@ async def generate_morning_plan(bot: Bot, chat_id: int) -> dict | None:
     prompt = system_prompt
 
     # Call Claude
+    # MODEL_GUIDE: Sonnet — daily plan, reasoning + context
     response = await call_claude_safe(prompt, model="sonnet", recipe="daily_plan")
 
     if response is None:

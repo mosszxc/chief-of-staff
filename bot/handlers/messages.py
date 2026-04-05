@@ -34,12 +34,13 @@ router = Router(name="messages")
 # --- FSM states for New Intent Pipeline ---
 
 class IntentPipelineState(StatesGroup):
-    """FSM states for the 3-step new intent pipeline."""
-    assess_review = State()       # waiting for user to confirm areas
-    assess_add = State()          # waiting for user to type area to add
-    research_review = State()     # waiting for user to confirm approach
-    decompose_review = State()    # waiting for accept/redo
-    decompose_redo = State()      # waiting for redo feedback
+    """FSM states for the 4-step new intent pipeline (CLARIFY → ASSESS → RESEARCH → DECOMPOSE)."""
+    clarify_waiting = State()     # STEP 0: waiting for user's answers to clarifying questions
+    assess_review = State()       # STEP 1: waiting for user to confirm areas
+    assess_add = State()          # STEP 1: waiting for user to type area to add
+    research_review = State()     # STEP 2: waiting for user to confirm approach
+    decompose_review = State()    # STEP 3: waiting for accept/redo
+    decompose_redo = State()      # STEP 3: waiting for redo feedback
 
 
 # --- Progress-updating Claude call helper ---
@@ -288,6 +289,7 @@ async def _handle_completion(message: Message) -> None:
         tasks=tasks_str, goals=goals_str, message=message.text
     )
 
+    # MODEL_GUIDE: Haiku — task completion parsing, determine which task → CRUD
     result = await call_claude_safe(prompt, model="haiku", timeout=30, recipe="complete_classify")
 
     if not result:
@@ -367,7 +369,7 @@ async def _execute_recipe(message: Message, intent: Intent) -> None:
     context = assemble_context(recipe_name, **extra)
     system_prompt = build_system_prompt(**context)
 
-    # Call Claude
+    # MODEL_GUIDE: model from INTENT_MODEL (router.py) — see per-intent comments there
     response = await call_claude_safe(system_prompt, model=model, recipe=recipe_name)
 
     if not response:
@@ -430,19 +432,66 @@ def _is_strategic_change(text: str) -> bool:
 
 
 # =====================================================================
-# NEW INTENT PIPELINE: 3 steps with checkpoints
+# NEW INTENT PIPELINE: 4 steps with checkpoints (CLARIFY → ASSESS → RESEARCH → DECOMPOSE)
 # =====================================================================
 
-async def _pipeline_step1_assess(message: Message, state: FSMContext) -> None:
+async def _pipeline_step0_clarify(message: Message, state: FSMContext) -> None:
+    """STEP 0: CLARIFY — generate smart clarifying questions for the goal.
+
+    Claude (opus) generates 2-4 questions specific to this goal type.
+    User answers free text -> saved in FSM -> passed to STEP 1 ASSESS.
+    """
+    user_text = message.text or ""
+    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+
+    # Build user model summary for the prompt
+    user_model = load_yaml("user_model.yaml").get("user_model", {})
+    identity = user_model.get("identity", {})
+    user_summary_parts = []
+    if identity.get("role"):
+        user_summary_parts.append(f"Роль: {identity['role']}")
+    if user_model.get("knowledge_stack"):
+        user_summary_parts.append(f"Стек: {user_model['knowledge_stack']}")
+    if user_model.get("preferences"):
+        user_summary_parts.append(f"Предпочтения: {', '.join(user_model['preferences'])}")
+    user_model_summary = "; ".join(user_summary_parts) if user_summary_parts else "нет данных"
+
+    # Load clarify recipe and fill placeholders
+    recipe_text = load_recipe("clarify")
+    clarify_prompt = recipe_text.replace("{goal}", user_text).replace("{user_model_summary}", user_model_summary)
+
+    # MODEL_GUIDE: Opus — CLARIFY determines direction, wrong questions = wasted pipeline
+    result = await call_claude_safe(clarify_prompt, model="opus", timeout=60, recipe="clarify")
+
+    if not result:
+        # Fallback: skip CLARIFY, go straight to ASSESS
+        logger.warning("[clarify] Claude failed, skipping to ASSESS")
+        await _pipeline_step1_assess(message, state)
+        return
+
+    # Send questions to user
+    await message.answer(result)
+
+    # Save goal in FSM, wait for user's answers
+    await state.set_state(IntentPipelineState.clarify_waiting)
+    await state.update_data(pipeline_goal=user_text)
+
+    add_to_memory("user", user_text)
+    add_to_memory("bot", f"[CLARIFY] {result[:200]}")
+
+
+async def _pipeline_step1_assess(message: Message, state: FSMContext, clarification: str = "") -> None:
     """STEP 1: ASSESS — determine knowledge areas + check Grimoire coverage.
 
-    Part A: Claude (haiku) determines knowledge areas needed for the goal.
+    Part A: Claude (opus) determines knowledge areas needed for the goal.
     Part B: check_knowledge_coverage() queries Grimoire for each area.
     Part C: Show coverage to user with confirm/add buttons.
     """
-    user_text = message.text or ""
+    # Get goal from FSM (set by CLARIFY) or from message text
+    fsm_data = await state.get_data()
+    user_text = fsm_data.get("pipeline_goal", "") or (message.text or "")
 
-    # --- Part A: Determine knowledge areas via Haiku ---
+    # --- Part A: Determine knowledge areas via Opus ---
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
 
     # Build assess prompt with user context
@@ -456,15 +505,18 @@ async def _pipeline_step1_assess(message: Message, state: FSMContext) -> None:
     )
     if user_model.get("preferences"):
         assess_prompt += f"Preferences: {', '.join(user_model['preferences'])}\n"
-    assess_prompt += (
-        f"\n# User's goal\n{user_text}\n\n"
-        f"# Instructions\n{recipe_text}\n"
-    )
+    assess_prompt += f"\n# User's goal\n{user_text}\n\n"
+
+    # Add clarification context from STEP 0 if available
+    if clarification:
+        assess_prompt += f"# User's clarification (answers to clarifying questions)\n{clarification}\n\n"
+
+    assess_prompt += f"# Instructions\n{recipe_text}\n"
 
     status_msg = await message.answer("🔍 Определяю области знаний...")
 
-    # Sonnet for ASSESS — strategic decision (which areas to research), not simple classification
-    result = await call_claude_safe(assess_prompt, model="sonnet", timeout=120, recipe="assess")
+    # MODEL_GUIDE: Opus — ASSESS is strategic (which areas to research), error = useless research
+    result = await call_claude_safe(assess_prompt, model="opus", timeout=120, recipe="assess")
 
     if not result:
         try:
@@ -588,6 +640,7 @@ async def _pipeline_step2_research(bot, chat_id: int, state: FSMContext) -> None
     research_prompt += f"\n# Instructions\n{recipe_text}\n"
 
     # Call Claude with progress statuses
+    # MODEL_GUIDE: Sonnet — RESEARCH is synthesis + analysis, standard work
     n_gaps = len(gaps)
     result, status_msg = await call_claude_with_progress(
         bot, chat_id, research_prompt,
@@ -726,7 +779,7 @@ async def _pipeline_step3_decompose(bot, chat_id: int, state: FSMContext,
 
     decompose_prompt += f"\n# Instructions\n{recipe_text}\n"
 
-    # Call Claude with progress
+    # MODEL_GUIDE: Sonnet — DECOMPOSE is structuring, not deep reasoning
     result, status_msg = await call_claude_with_progress(
         bot, chat_id, decompose_prompt,
         model="sonnet", recipe="decompose",
@@ -1076,6 +1129,25 @@ async def on_pipeline_redo(callback: CallbackQuery, state: FSMContext):
 # FSM TEXT HANDLERS (must be before catch-all)
 # =====================================================================
 
+# --- Pipeline: CLARIFY waiting for answers ---
+
+@router.message(IntentPipelineState.clarify_waiting)
+async def on_clarify_answer(message: Message, state: FSMContext):
+    """Handle user's answers to STEP 0 clarifying questions -> proceed to STEP 1 ASSESS."""
+    if not _check_auth(message):
+        return
+
+    clarification = message.text or ""
+
+    # Save clarification in FSM
+    await state.update_data(pipeline_clarification=clarification)
+
+    add_to_memory("user", clarification[:300])
+
+    # Proceed to STEP 1: ASSESS with clarification context
+    await _pipeline_step1_assess(message, state, clarification=clarification)
+
+
 # --- Partial task: waiting for text ---
 
 @router.message(PartialTaskState.waiting_for_text)
@@ -1240,7 +1312,7 @@ async def on_message(message: Message, state: FSMContext):
 
     match intent:
         case Intent.NEW_INTENT:
-            await _pipeline_step1_assess(message, state)
+            await _pipeline_step0_clarify(message, state)
             return
 
         case Intent.PLAN:

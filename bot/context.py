@@ -283,6 +283,7 @@ async def _validate_relevance(area: str, entities: list[str]) -> bool:
         f"ДА = сущности действительно про эту тему. "
         f"НЕТ = сущности про другое, просто похожие слова."
     )
+    # MODEL_GUIDE: Haiku — LLM relevance validation, yes/no answer
     result = await call_claude_safe(prompt, model="haiku", recipe="relevance_check")
     if result is None:
         return True  # fallback: trust threshold if LLM unavailable

@@ -16,6 +16,7 @@ logger = logging.getLogger("cos.claude")
 MODEL_TIMEOUTS = {
     "haiku": 45,
     "sonnet": 120,
+    "opus": 180,  # MODEL_GUIDE: Opus for strategic decisions (CLARIFY, ASSESS, goal_change)
 }
 
 # Project root for CWD

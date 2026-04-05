@@ -28,19 +28,19 @@ class Intent(enum.Enum):
     NEW_INTENT = "new_intent"
 
 
-# Model routing: intent -> model
+# Model routing: intent -> model (see MODEL_GUIDE.md)
 INTENT_MODEL = {
-    Intent.PLAN: "sonnet",
-    Intent.COMPLETE: "haiku",
-    Intent.POSTPONE: "haiku",
-    Intent.ADD_TASK: "haiku",
-    Intent.STATUS: "haiku",
-    Intent.CHAT: "sonnet",
-    Intent.DOMAIN: "sonnet",
-    Intent.INTERVIEW: "sonnet",
-    Intent.RECRUITER: "sonnet",
-    Intent.GOAL_CHANGE: "sonnet",
-    Intent.NEW_INTENT: "sonnet",
+    Intent.PLAN: "sonnet",         # MODEL_GUIDE: daily_plan — Sonnet
+    Intent.COMPLETE: "haiku",      # MODEL_GUIDE: task completion parsing — Haiku
+    Intent.POSTPONE: "haiku",      # MODEL_GUIDE: CRUD operation — Haiku
+    Intent.ADD_TASK: "haiku",      # MODEL_GUIDE: CRUD operation — Haiku
+    Intent.STATUS: "haiku",        # MODEL_GUIDE: data formatting — Haiku
+    Intent.CHAT: "sonnet",         # MODEL_GUIDE: free_chat — Sonnet
+    Intent.DOMAIN: "sonnet",       # MODEL_GUIDE: domain question — Sonnet
+    Intent.INTERVIEW: "sonnet",    # MODEL_GUIDE: interview_prep — Sonnet
+    Intent.RECRUITER: "sonnet",    # MODEL_GUIDE: recruiter_reply — Sonnet
+    Intent.GOAL_CHANGE: "opus",    # MODEL_GUIDE: goal_change challenge — Opus
+    Intent.NEW_INTENT: "opus",     # MODEL_GUIDE: pipeline entry — Opus (handled by pipeline)
 }
 
 # Recipe mapping: intent -> recipe file name
@@ -80,6 +80,7 @@ Category:"""
 async def _llm_classify(text: str) -> Intent:
     """Level 2: Use Haiku to classify ambiguous text."""
     prompt = _CLASSIFY_PROMPT.format(message=text[:500])
+    # MODEL_GUIDE: Haiku — router classification, binary choice
     result = await call_claude_safe(prompt, model="haiku", timeout=30, recipe="router")
 
     if result:
@@ -116,6 +117,7 @@ def keyword_match(text: str) -> Intent | None:
     _new_intent_patterns = [
         "хочу выучить", "хочу научить", "хочу начать",
         "хочу освоить", "хочу попробовать", "хочу запустить",
+        "хочу открыть", "хочу создать", "хочу построить",
         "want to learn", "want to start",
         "начну учить", "начну изучать",
         "научи меня", "помоги выучить", "помоги освоить",
