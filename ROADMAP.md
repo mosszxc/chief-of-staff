@@ -14,7 +14,6 @@
 
 ### 0.2 Smoke Test: Claude CLI subprocess
 ```bash
-# Проверить что claude --print работает из Python
 python3 -c "
 import asyncio, subprocess
 result = subprocess.run(
@@ -29,28 +28,26 @@ print('EXIT:', result.returncode)
 
 ### 0.3 Data Files
 Заполнить из `~/Ким_Михаил_Карьерная_Стратегия_v2.md`:
-
 ```
 data/strategy.yaml    — horizons, hard_constraints, anti_patterns, blocking_chain
 data/intents.yaml     — 4-5 intents из h1 с goals
 data/goals.yaml       — goals с текущим прогрессом
 data/user_model.yaml  — identity, knowledge_stack, preferences, narrative
 ```
-
 **Done:** все 4 файла существуют, PyYAML их парсит без ошибок.
 
 ### 0.4 Project Skeleton
 ```bash
 cd ~/chief-of-staff
-# Создать структуру из SPEC.md Section 10
-# pyproject.toml, .env.example, bot/, mcp/, recipes/, templates/, data/
 pip install -e .
 ```
-**Done:** `python -m bot.main` запускается (пусть пока падает — главное import работает).
+**Done:** `python -m bot.main` запускается (import работает).
 
 ---
 
 ## Phase 1: Утренний план + кнопки (3-5 дней)
+
+**Outcome:** каждое утро получаю полезный план в Telegram, отмечаю задачи кнопками.
 
 ### Что делаем
 ```
@@ -64,29 +61,35 @@ handlers/commands   — /start (onboarding), /today, /debug
 
 ### Acceptance Criteria
 
-| # | Критерий | Как проверить |
-|---|---------|---------------|
-| 1 | В 08:00 приходит план с reasoning | Подождать утро или вызвать /today |
-| 2 | План содержит 3-5 задач привязанных к intents | Проверить что задачи из goals.yaml |
-| 3 | План компактный, reasoning по кнопке [💡] | Нажать кнопку — раскрывается |
-| 4 | Кнопка ✅ отмечает задачу done в history | Нажать → проверить YAML |
-| 5 | Кнопка ⏭ откладывает задачу, times_skipped++ | Нажать → проверить YAML |
-| 6 | Кнопка 📝 спрашивает "что успел?" | Нажать → бот спрашивает → ответить → YAML обновлён |
-| 7 | /start → onboarding (файл или 5 вопросов) | Очистить data/ → /start → пройти flow |
-| 8 | /today → план на сегодня (если нет — генерирует) | Вызвать до 08:00 |
-| 9 | /debug → последний вызов claude (recipe, время) | Вызвать после любого действия |
-| 10 | Claude timeout → fallback сообщение | Поставить timeout=1 → проверить |
-| 11 | 3 быстрых нажатия кнопок подряд → данные не теряются (asyncio.Lock) | Нажать ✅ ✅ ⏭ за 2 сек → проверить все 3 записались в YAML |
+**Must:**
+1. Утренний план приходит и он **полезный** (не generic список, а reasoning с контекстом)
+2. Кнопки ✅/📝/⏭ работают — нажал, YAML обновился, прогресс виден
+3. /start → onboarding заполняет data/ (файл или вопросы)
+
+**Nice-to-have:**
+4. /debug показывает последний вызов claude
+5. Fallback при timeout Claude CLI
 
 ### Definition of Done
 ```
-Утром пришёл план → нажал кнопки → YAML обновился → /debug показывает что произошло.
-Можно пользоваться каждый день. Race condition при быстрых нажатиях не теряет данные.
+Утром пришёл план → нажал кнопки → YAML обновился.
+Можно пользоваться каждый день.
+```
+
+### Checkpoint
+```
+Прежде чем Phase 2 — ответить:
+- План утром реально помогает или generic?
+- Формат удобный или надо менять?
+- Claude CLI стабилен или постоянные таймауты?
+- Что изменилось в понимании задачи?
 ```
 
 ---
 
 ## Phase 2: Вечер + свободный чат + Grimoire (неделя 2)
+
+**Outcome:** полный дневной цикл (утро → день → вечер), могу писать боту свободным текстом.
 
 ### Что делаем
 ```
@@ -100,28 +103,35 @@ templates/system_prompt.md — Jinja2 шаблон
 
 ### Acceptance Criteria
 
-| # | Критерий | Как проверить |
-|---|---------|---------------|
-| 1 | В 22:00 приходит итог дня с кнопками энергии | Подождать вечер |
-| 2 | "Сделал portfolio" → бот понимает, обновляет goal | Написать текстом |
-| 3 | "Что мы знаем про X?" → ответ из Grimoire (cos) | Спросить после ingestion |
-| 4 | "Подготовь к интервью в Y" → recipe с контекстом | Спросить → проверить что есть case stories |
-| 5 | "Рекрутер написал: ..." → драфт ответа | Переслать текст рекрутера |
-| 6 | Первая строка ответа = индикатор маршрута | Проверить для разных типов |
-| 7 | Drift alert НЕ приходит в выходные | Проверить в субботу |
-| 8 | Drift alert приходит после 3 рабочих дней без прогресса | Не отмечать 3 дня → проверить |
-| 9 | "Typing..." при ожидании Claude | Написать любой текст → видеть индикатор |
-| 10 | Долгая операция → "🔍 Исследую тему..." | Спросить что-то требующее web search |
+**Must:**
+1. Вечерний итог приходит, энергия 1-5 записывается
+2. Свободный текст ("сделал portfolio") → бот понимает, обновляет goal
+3. Drift alert работает в рабочие дни, НЕ работает в выходные
+
+**Nice-to-have:**
+4. Grimoire (cos) отвечает на доменные вопросы
+5. "Typing..." и прогрессивные статусы при ожидании
 
 ### Definition of Done
 ```
 Полный цикл: утро (план) → день (кнопки + текст) → вечер (итог) → drift если нужен.
-Свободный чат работает с контекстом. Grimoire отвечает на доменные вопросы.
+Свободный чат работает с контекстом.
+```
+
+### Checkpoint
+```
+Прежде чем Phase 3 — ответить:
+- Вечерний check-in заполняю или игнорирую?
+- Drift alert помогает или раздражает?
+- Какие типы сообщений пишу чаще всего? Роутер справляется?
+- Grimoire нужен или хватает без него?
 ```
 
 ---
 
 ## Phase 3: New Intent + Claude Code sync + patterns (неделя 3)
+
+**Outcome:** могу создавать новые цели через workflow, Claude Code и Telegram видят одни данные.
 
 ### Что делаем
 ```
@@ -133,47 +143,51 @@ handlers/messages    — goal_change → challenge → redirect to Claude Code
 
 ### Acceptance Criteria
 
-| # | Критерий | Как проверить |
-|---|---------|---------------|
-| 1 | Claude Code: `today()` показывает план | Открыть CC → вызвать tool |
-| 2 | Claude Code: `goal_update()` обновляет прогресс | Обновить → проверить в Telegram |
-| 3 | "Хочу выучить X" → бот: "Давай в Claude Code" | Написать в Telegram |
-| 4 | В Claude Code: ASSESS→RESEARCH→DECOMPOSE→METHOD→SAVE | Пройти workflow для новой цели |
-| 5 | Новый intent появился в утреннем плане | Создать вечером → проверить утром |
-| 6 | Задача отложена 3+ раз → бот предлагает другой формат | Откладывать одну задачу 3 дня |
-| 7 | "Может в DA?" → challenge с данными из стратегии | Написать → проверить что не соглашается сразу |
-| 8 | Research → LLM extract facts → validate → add metadata → ingest в cos | Создать intent → проверить в Grimoire: entities есть, metadata (researched_at, ttl_days) заполнена |
-| 9 | TTL warning если данные устарели | Установить ttl_days=1 на тестовый факт → на следующий день спросить → увидеть warning |
-| 10 | Multi-domain research: ASSESS определяет домены → targeted search по каждому → один синтез | Создать intent "работа в Корее" → проверить что searches: рынок + виза + интервью + LinkedIn |
-| 11 | Intent iteration: "не нравится метод, хочу через сериалы" → Claude Code пересматривает | В CC workflow сказать "нет, переделай" → methodology обновился |
-| 12 | Strategy pivot: "дропаю поиск работы" → challenge с полным контекстом стратегии | Написать в Telegram → redirect в CC → CC загрузил стратегию + progress + constraints → challenge |
-| 13 | Re-research trigger: TTL истёк + пользователь запросил тему → автоматический web search | Факт с ttl=1 → на следующий день "что мы знаем про X?" → бот дополняет из веба |
+**Must:**
+1. Claude Code видит те же данные (MCP tools: today, goal_update)
+2. New Intent Workflow: ASSESS→RESEARCH→DECOMPOSE→METHOD→SAVE в Claude Code
+3. Research → pre-process → ingest в Grimoire (cos) с metadata + TTL
+
+**Nice-to-have:**
+4. Intent iteration ("переделай метод") работает в Claude Code
+5. Strategy pivot с challenge ("дропаю цель" → данные из стратегии)
+6. Re-research trigger при истёкшем TTL
 
 ### Definition of Done
 ```
-Два интерфейса (Telegram + Claude Code) видят одни данные.
-Новые цели создаются через workflow. Workflow итеративный — можно оспорить любой шаг.
-Strategy pivot работает с challenge. Паттерны (avoidance, drift) работают.
-Research → pre-process → ingest в Grimoire с metadata + TTL.
-Устаревшие данные помечаются, re-research triggered автоматически.
+Два интерфейса видят одни данные. Новые цели через workflow.
+Research сохраняется в Grimoire и переиспользуется.
+```
+
+### Checkpoint
+```
+Прежде чем Phase 4 — ответить:
+- Workflow создания целей реально использую?
+- MCP sync нужен или хватает Telegram?
+- Паттерны (avoidance 3x) помогают?
+- Что убрать / что добавить?
 ```
 
 ---
 
-## Phase 4: Polish + Daily Use (неделя 4+)
+## Phase 4: Daily Use + Polish (неделя 4+)
+
+**Outcome:** система работает каждый день, улучшается по ходу использования.
+
+Не планировать заранее. Использовать → фиксить что мешает.
 
 ```
-Не планировать заранее. Использовать каждый день → фиксить что мешает.
-Возможные улучшения:
-  - Prompt tuning (план слишком длинный / короткий / generic)
+Возможные направления:
+  - Prompt tuning (план generic → конкретнее)
+  - Evening timing (22:00 → 20:00?)
   - Новые recipes по мере надобности
   - Grimoire ingestion pipeline тюнинг
-  - Evening check-in timing (20:00 vs 22:00)
+  - Compact mode / detailed mode toggle
 ```
 
 ---
 
-## Порядок работы
+## Timeline
 
 ```
 Сейчас:     Phase 0 (prerequisites)         ← 30 мин руками
