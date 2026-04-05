@@ -197,12 +197,12 @@ recipes/decompose.md — промпт для DECOMPOSE+METHOD
 ```
 Pipeline в Telegram (4 шага с checkpoint'ами):
 
-STEP 0: CLARIFY (5-10 сек, sonnet)
+STEP 0: CLARIFY (5-10 сек, opus)
   Claude генерирует 2-4 уточняющих вопроса под тип цели (нельзя захардкодить)
   Юзер отвечает → контекст передаётся в ASSESS
   → Без уточнений ASSESS работает generic ("юридика" vs "регистрация ИП в РФ")
 
-STEP 1: ASSESS + KNOWLEDGE CHECK (10-20 сек, sonnet + Grimoire HTTP)
+STEP 1: ASSESS + KNOWLEDGE CHECK (10-20 сек, opus + Grimoire HTTP)
   Часть A: Claude определяет ОБЛАСТИ ЗНАНИЙ с учётом уточнений
     Не "юридика" а "регистрация ИП/самозанятость в РФ"
   Часть B: check_knowledge_coverage() → Grimoire semantic search + LLM relevance validation
