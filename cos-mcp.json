@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cos": {
+      "command": "python",
+      "args": ["mcp/cos_server.py"],
+      "cwd": "/home/dev-moss/chief-of-staff"
+    }
+  }
+}
