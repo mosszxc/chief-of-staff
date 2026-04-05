@@ -1299,16 +1299,20 @@ async def on_decompose_redo_feedback(message: Message, state: FSMContext):
 
 # --- Catch-all: free text ---
 
+async def process_text(text: str, message: Message, state: FSMContext):
+    """Process text through router. Called by on_message AND voice handler."""
+
+
 @router.message()
 async def on_message(message: Message, state: FSMContext):
-    """Handle any text message not caught by commands/callbacks/FSM."""
+    """Catch-all: route typed text through process_text."""
     if not message.text:
         return
     if not _check_auth(message):
         return
-
-    intent = await route_message(message.text)
-    logger.info(f"[message] '{message.text[:50]}' -> {intent.value}")
+    await process_text(message.text, message, state)
+    intent = await route_message(text)
+    logger.info(f"[message] '{text[:50]}' -> {intent.value}")
 
     match intent:
         case Intent.NEW_INTENT:

@@ -113,12 +113,8 @@ async def on_voice(message: Message, state: FSMContext):
         await message.reply(f"🎤 _{safe_text}_", parse_mode="Markdown")
 
         # 4. Route through the same pipeline as text messages
-        #    Import here to avoid circular imports
-        from bot.handlers.messages import on_message
-
-        # Patch message.text so the catch-all handler processes it as typed text
-        message.text = text
-        await on_message(message, state)
+        from bot.handlers.messages import process_text
+        await process_text(text, message, state)
 
     except Exception as e:
         logger.error("Voice processing failed: %s", e, exc_info=True)
