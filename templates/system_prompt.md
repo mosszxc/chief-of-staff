@@ -56,6 +56,11 @@ Case stories:
 - "{{ task.title }}" postponed {{ task.times_skipped }} times
 {% endfor %}
 
+{% if detected_patterns is defined and detected_patterns %}
+# Detected Patterns (automated analysis)
+{{ detected_patterns }}
+{% endif %}
+
 {% if recent_progress is defined and recent_progress %}
 # Recent Progress (7 days)
 {{ recent_progress }}

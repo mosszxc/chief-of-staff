@@ -33,8 +33,22 @@ _conversation_memory: deque[dict] = deque(maxlen=10)
 
 # Grimoire API config
 GRIMOIRE_API_URL = os.getenv("GRIMOIRE_API_URL", "http://localhost:8879")
-GRIMOIRE_PROJECT = "cos"
 GRIMOIRE_TTL_DAYS = 30  # warn if data older than this
+
+# Dual-project routing keywords
+RUBICK_KEYWORDS = [
+    "маркетинг", "копирайтинг", "оффер", "vsl", "воронк", "лидген",
+    "продаж", "landing", "реклам", "конверси", "таргет", "трафик",
+    "позиционирован", "копирайт", "бренд", "контент", "offer",
+    "психолог", "аудитори", "сегмент",
+]
+COS_KEYWORDS = [
+    "карьер", "работу ", "работа ", "работе ", "работой",
+    "интервью", "зарплат", "виз", "резюме",
+    "вакансi", "вакансий", "стартап", "рынок труда", "технолог",
+    "langgraph", "ai agent", "portfolio", "linkedin", "github",
+    "собеседован", "рекрут", "нанима", "найм",
+]
 
 
 def _get_lock(filename: str) -> asyncio.Lock:
@@ -169,66 +183,127 @@ def get_conversation_memory() -> str:
     return "\n".join(lines)
 
 
-# --- Grimoire RAG ---
+# --- Grimoire RAG (dual-project routing) ---
 
-async def grimoire_retrieve(query: str) -> str | None:
-    """Retrieve from Grimoire knowledge base via HTTP API.
+def _select_grimoire_project(query: str) -> str:
+    """Auto-select Grimoire project based on query keywords.
 
-    Uses the fast retrieve endpoint (no LLM, raw graph data):
-    POST http://localhost:8879/api/projects/{project}/retrieve
-
-    Fallback: POST http://localhost:8879/api/search (slower, uses LLM)
-    Returns text result or None if unavailable.
+    Returns: "rubick", "cos", or "both" if ambiguous.
     """
+    lower = query.lower()
+    rubick_score = sum(1 for kw in RUBICK_KEYWORDS if kw in lower)
+    cos_score = sum(1 for kw in COS_KEYWORDS if kw in lower)
+
+    if rubick_score > 0 and cos_score == 0:
+        return "rubick"
+    if cos_score > 0 and rubick_score == 0:
+        return "cos"
+    if rubick_score > 0 and cos_score > 0:
+        return "both"
+    # Neither matched -- default to both
+    return "both"
+
+
+async def _retrieve_from_project(client: httpx.AsyncClient, project: str, query: str) -> str | None:
+    """Retrieve from a single Grimoire project. Returns formatted text or None."""
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            # Try fast retrieve endpoint first (raw context, no LLM)
-            resp = await client.post(
-                f"{GRIMOIRE_API_URL}/api/projects/{GRIMOIRE_PROJECT}/retrieve",
-                json={"query": query, "mode": "hybrid"},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                parts = []
-
-                # Extract entities
-                for e in data.get("entities", [])[:10]:
-                    name = e.get("name", "")
-                    desc = e.get("description", "")
-                    if name and desc:
-                        parts.append(f"- {name}: {desc}")
-
-                # Extract relationship descriptions
-                for r in data.get("relationships", [])[:10]:
-                    desc = r.get("description", "")
-                    if desc:
-                        parts.append(f"- {desc}")
-
-                # Extract chunks (main content)
-                for c in data.get("chunks", [])[:5]:
-                    content = c.get("content", "")
-                    if content:
-                        parts.append(content[:500])
-
-                # Also use context field if present
-                context = data.get("context", "")
-                if context:
-                    parts.insert(0, context[:1000])
-
-                if parts:
-                    combined = "\n".join(parts)
-                    logger.info(f"[grimoire] retrieved {len(combined)} chars for query '{query[:50]}'")
-                    return combined[:3000]
-
-            # If retrieve returned nothing useful, that's ok
-            if resp.status_code != 200:
-                logger.warning(f"[grimoire] HTTP {resp.status_code} for query '{query[:50]}'")
-
+        resp = await client.post(
+            f"{GRIMOIRE_API_URL}/api/projects/{project}/retrieve",
+            json={"query": query, "mode": "hybrid"},
+        )
+        if resp.status_code != 200:
+            logger.warning(f"[grimoire/{project}] HTTP {resp.status_code}")
             return None
 
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError) as e:
-        logger.warning(f"[grimoire] unavailable: {e}")
+        data = resp.json()
+        parts = []
+
+        # Extract context field if present
+        context = data.get("context", "")
+        if context:
+            parts.append(context[:1000])
+
+        # Extract entities
+        for e in data.get("entities", [])[:10]:
+            name = e.get("name", "")
+            desc = e.get("description", "")
+            if name and desc:
+                parts.append(f"- {name}: {desc}")
+
+        # Extract relationship descriptions
+        for r in data.get("relationships", [])[:10]:
+            desc = r.get("description", "")
+            if desc:
+                parts.append(f"- {desc}")
+
+        # Extract chunks (main content)
+        for c in data.get("chunks", [])[:5]:
+            content = c.get("content", "")
+            if content:
+                parts.append(content[:500])
+
+        if parts:
+            combined = "\n".join(parts)
+            logger.info(f"[grimoire/{project}] retrieved {len(combined)} chars for '{query[:50]}'")
+            return combined[:2000]
+
         return None
+
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError) as e:
+        logger.warning(f"[grimoire/{project}] unavailable: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"[grimoire/{project}] error: {e}")
+        return None
+
+
+async def grimoire_retrieve(query: str, project: str = "auto") -> str | None:
+    """Retrieve from Grimoire knowledge base with dual-project routing.
+
+    project="auto" (default): auto-selects rubick/cos/both based on keywords.
+    project="rubick": marketing, copy, psychology, VSL, business strategy.
+    project="cos": career, job market, tech, interview prep.
+
+    Fallback: if primary project returns nothing, tries the other.
+    """
+    if project == "auto":
+        project = _select_grimoire_project(query)
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            if project == "both":
+                # Query both projects, merge results
+                import asyncio
+                results = await asyncio.gather(
+                    _retrieve_from_project(client, "rubick", query),
+                    _retrieve_from_project(client, "cos", query),
+                    return_exceptions=True,
+                )
+                parts = []
+                for i, (proj, result) in enumerate(zip(["rubick", "cos"], results)):
+                    if isinstance(result, Exception):
+                        continue
+                    if result:
+                        parts.append(f"[{proj}]\n{result}")
+
+                if parts:
+                    combined = "\n\n---\n\n".join(parts)
+                    return combined[:3000]
+
+                return None
+
+            else:
+                # Single project query
+                result = await _retrieve_from_project(client, project, query)
+                if result:
+                    return result
+
+                # Fallback: try the other project
+                fallback = "cos" if project == "rubick" else "rubick"
+                logger.info(f"[grimoire] primary '{project}' empty, trying fallback '{fallback}'")
+                result = await _retrieve_from_project(client, fallback, query)
+                return result
+
     except Exception as e:
         logger.warning(f"[grimoire] unexpected error: {e}")
         return None
@@ -262,6 +337,8 @@ def assemble_context(recipe_name: str, **extra) -> dict:
     Returns dict with all context keys needed by the system prompt template.
     Supports recipe-specific context loading.
     """
+    from bot.patterns import detect_all_patterns, format_patterns_for_prompt
+
     # Base context: always loaded
     context = {
         "strategy": load_yaml("strategy.yaml").get("strategy", {}),
@@ -272,6 +349,13 @@ def assemble_context(recipe_name: str, **extra) -> dict:
         "yesterday": load_yesterday_summary(),
         "skipped_tasks": get_skipped_tasks_history(),
     }
+
+    # Pattern detection for morning plan and drift
+    if recipe_name in ("daily_plan", "drift_alert"):
+        patterns = detect_all_patterns()
+        patterns_text = format_patterns_for_prompt(patterns)
+        if patterns_text:
+            context["detected_patterns"] = patterns_text
 
     # Recipe-specific additions
     if recipe_name == "free_chat":

@@ -210,6 +210,75 @@ async def _execute_recipe(message: Message, intent: Intent) -> None:
             await message.answer(chunk, parse_mode="Markdown")
 
 
+# --- Goal change handling ---
+
+# Keywords that indicate a strategic (big) change vs. a minor tweak
+_STRATEGIC_KEYWORDS = [
+    "дропаю", "бросаю", "отказываюсь", "другое направление",
+    "полностью поменять", "не хочу больше", "может лучше",
+    "пересмотреть всё", "всё поменялось", "получил оффер",
+    "переехал", "уволился", "новая стратегия",
+]
+
+_MINOR_KEYWORDS = [
+    "приоритет", "дедлайн", "срок", "добавь goal",
+    "поменяй приоритет", "p1", "p2", "p3",
+]
+
+
+def _is_strategic_change(text: str) -> bool:
+    """Determine if the goal change is strategic (needs Claude Code)."""
+    lower = text.lower()
+    # If any strategic keyword matches, it's strategic
+    if any(kw in lower for kw in _STRATEGIC_KEYWORDS):
+        return True
+    # If any minor keyword matches, it's minor
+    if any(kw in lower for kw in _MINOR_KEYWORDS):
+        return False
+    # Default: treat as strategic to be safe
+    return True
+
+
+async def _handle_goal_change(message: Message, intent: Intent) -> None:
+    """Handle goal change requests.
+
+    Minor changes (priority, deadline) -> handle in Telegram via recipe.
+    Strategic changes (drop goal, pivot) -> challenge with data, redirect to Claude Code.
+    """
+    text = message.text or ""
+
+    if _is_strategic_change(text):
+        # Challenge with strategy data before redirecting
+        strategy = load_yaml("strategy.yaml").get("strategy", {})
+        constraints = strategy.get("hard_constraints", [])
+        blocking = strategy.get("blocking_chain", "")
+
+        challenge_parts = [
+            "**Изменение цели.**\n",
+            "Прежде чем менять, вот факты:",
+        ]
+
+        if constraints:
+            for c in constraints:
+                challenge_parts.append(f"  - {c.get('id', '?')}: {c.get('fact', '')}")
+
+        if blocking:
+            chain = str(blocking).strip()
+            if len(chain) > 100:
+                chain = chain[:100] + "..."
+            challenge_parts.append(f"\nBlocking chain: {chain}")
+
+        challenge_parts.append(
+            "\nЭто стратегическое решение. Для полного анализа "
+            "открой Claude Code -- там ресёрч, данные, декомпозиция."
+        )
+
+        await message.answer("\n".join(challenge_parts), parse_mode="Markdown")
+    else:
+        # Minor change -- execute recipe normally
+        await _execute_recipe(message, intent)
+
+
 # --- Onboarding callback handlers (must be before catch-all) ---
 
 @router.callback_query(F.data == "onboard:file")
@@ -357,6 +426,9 @@ async def on_message(message: Message):
 
         case Intent.ADD_TASK:
             await message.answer("Добавление задач будет в Phase 3 (MCP tools).\nПока задачи генерируются автоматически в утреннем плане.")
+
+        case Intent.GOAL_CHANGE:
+            await _handle_goal_change(message, intent)
 
         case _:
             # All other intents: execute recipe
