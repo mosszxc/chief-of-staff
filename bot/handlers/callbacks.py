@@ -119,6 +119,37 @@ def _rebuild_keyboard(original_markup, completed_task_id: str, status_icon: str)
     return InlineKeyboardMarkup(inline_keyboard=new_rows) if new_rows else None
 
 
+# --- Task selection (press number → action picker) ---
+
+@router.callback_query(F.data.startswith("task:"))
+async def on_task_select(callback: CallbackQuery):
+    """User pressed task number. Show task title + action buttons."""
+    task_id = callback.data.split(":", 1)[1]
+    history = load_history()
+    task = _find_task_in_history(history, task_id)
+
+    if not task:
+        await callback.answer("Задача не найдена")
+        return
+
+    title = task.get("title", task_id)
+    status = task.get("status", "pending")
+
+    if status != "pending":
+        icon = {"done": "✅", "skipped": "⏭", "partial": "📝"}.get(status, "❓")
+        await callback.answer(f"{icon} Уже отмечено")
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Сделал", callback_data=f"complete:{task_id}"),
+        InlineKeyboardButton(text="📝 Частично", callback_data=f"partial:{task_id}"),
+        InlineKeyboardButton(text="⏭ Завтра", callback_data=f"postpone:{task_id}"),
+    ]])
+
+    await callback.answer()
+    await callback.message.answer(f"📌 {title}", reply_markup=kb)
+
+
 # --- Task completion ---
 
 @router.callback_query(F.data.startswith("complete:"))

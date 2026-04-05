@@ -64,17 +64,16 @@ def render_plan_message(plan: dict) -> tuple[str, InlineKeyboardMarkup | None]:
         InlineKeyboardButton(text="💡 Почему?", callback_data="plan:why"),
     ]
 
-    # Task buttons: one row per task, labeled with number
-    task_rows = []
+    # Task buttons: one row with just numbers
+    # Press number → bot asks what to do with that task
+    task_buttons = []
     for i, task in enumerate(tasks, 1):
         task_id = task.get("id", f"task_{i}")
-        task_rows.append([
-            InlineKeyboardButton(text=f"{i} ✅", callback_data=f"complete:{task_id}"),
-            InlineKeyboardButton(text=f"{i} 📝", callback_data=f"partial:{task_id}"),
-            InlineKeyboardButton(text=f"{i} ⏭", callback_data=f"postpone:{task_id}"),
-        ])
+        task_buttons.append(
+            InlineKeyboardButton(text=str(i), callback_data=f"task:{task_id}")
+        )
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[plan_row] + task_rows)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[plan_row, task_buttons])
 
     # Store full reasoning for "Why?" button
     plan["_full_reasoning"] = reasoning
