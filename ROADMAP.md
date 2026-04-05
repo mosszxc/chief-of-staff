@@ -138,6 +138,7 @@ templates/system_prompt.md — Jinja2 шаблон
 mcp/cos_server.py    — MCP server (7 tools) для Claude Code
 cos-mcp.json         — MCP config
 bot/patterns.py      — task_avoidance, blocking_stale, streak detection
+bot/context.py       — dual-project Grimoire routing (rubick + cos)
 handlers/messages    — goal_change → challenge → redirect to Claude Code
 ```
 
@@ -147,11 +148,13 @@ handlers/messages    — goal_change → challenge → redirect to Claude Code
 1. Claude Code видит те же данные (MCP tools: today, goal_update)
 2. New Intent Workflow: ASSESS→RESEARCH→DECOMPOSE→METHOD→SAVE в Claude Code
 3. Research → pre-process → ingest в Grimoire (cos) с metadata + TTL
+4. Dual-project routing: доменные вопросы → rubick (маркетинг) или cos (карьера), бот выбирает сам
 
 **Nice-to-have:**
-4. Intent iteration ("переделай метод") работает в Claude Code
-5. Strategy pivot с challenge ("дропаю цель" → данные из стратегии)
-6. Re-research trigger при истёкшем TTL
+5. Intent iteration ("переделай метод") работает в Claude Code
+6. Strategy pivot с challenge ("дропаю цель" → данные из стратегии)
+7. Re-research trigger при истёкшем TTL
+8. Fallback: если один проект пустой → попробовать второй
 
 ### Definition of Done
 ```
