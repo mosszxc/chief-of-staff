@@ -290,7 +290,13 @@ bot/main.py            — зарегистрировать voice handler
 Не планировать заранее. Использовать → фиксить что мешает.
 
 ```
-Возможные направления:
+Planned:
+  - Inactivity handling:
+    - FSM timeout 2ч → auto-cancel pipeline
+    - Return after gap: "Тебя не было N дней. [📋 Новый план]"
+    - No "ты тут?" reminders, ever
+
+Possible:
   - Prompt tuning (план generic → конкретнее)
   - Evening timing (22:00 → 20:00?)
   - Новые recipes по мере надобности
