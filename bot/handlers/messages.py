@@ -1,9 +1,10 @@
 """Free text message handler: routes through router -> action.
 
-Also handles FSM states for partial task completion text input
-and onboarding file upload.
+Also handles FSM states for partial task completion text input,
+onboarding file upload, and new intent review/redo workflow.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -11,8 +12,9 @@ from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.enums import ChatAction
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
 from bot.router import route_message, Intent, INTENT_MODEL, INTENT_RECIPE
 from bot.handlers.callbacks import PartialTaskState
@@ -26,6 +28,139 @@ from bot.context import (
 logger = logging.getLogger("cos.messages")
 
 router = Router(name="messages")
+
+
+# --- FSM states for New Intent workflow ---
+
+class NewIntentState(StatesGroup):
+    """FSM states for the new intent review/redo cycle."""
+    waiting_for_redo_feedback = State()
+
+
+# --- Progress-updating Claude call helper ---
+
+_PROGRESS_STATUSES = [
+    "🔍 Исследую тему...",
+    "📊 Проверяю что у тебя уже есть по теме...",
+    "🌐 Ищу лучшие методы в интернете...",
+    "🌐 Ищу реалистичные сроки...",
+    "📚 Проверяю базу знаний...",
+    "🧩 Собираю goals и метрики...",
+    "✍️ Формирую методологию...",
+    "⏳ Ещё работаю, это большой ресёрч...",
+    "🧠 Синтезирую всё вместе...",
+    "📝 Финализирую план...",
+    "⏳ Почти готово, проверяю...",
+]
+
+# Timeout for new_intent recipes (research can take 5-10 minutes)
+_NEW_INTENT_TIMEOUT = 600
+
+
+async def call_claude_with_progress(bot, chat_id: int, prompt: str, model: str = "sonnet", recipe: str = "unknown"):
+    """Call Claude while showing progress status updates to the user.
+
+    Sends a status message and updates it every 20 sec while waiting.
+    Covers up to 10 minutes of waiting with progressive statuses.
+    Returns (result_text, status_message) so caller can edit/delete the status msg.
+    """
+    msg = await bot.send_message(chat_id, _PROGRESS_STATUSES[0])
+
+    # Use extended timeout for new_intent recipes
+    timeout = _NEW_INTENT_TIMEOUT if "new_intent" in recipe else None
+
+    # Start Claude call as background task
+    task = asyncio.create_task(call_claude_safe(prompt, model=model, recipe=recipe, timeout=timeout))
+
+    # Update status every 20 sec while waiting
+    for status_text in _PROGRESS_STATUSES[1:]:
+        await asyncio.sleep(20)
+        if task.done():
+            break
+        try:
+            await msg.edit_text(status_text)
+        except Exception:
+            pass
+
+    # After all statuses exhausted, loop "still working" every 30 sec
+    while not task.done():
+        await asyncio.sleep(30)
+        if task.done():
+            break
+        try:
+            await msg.edit_text("🔄 Всё ещё работаю...")
+        except Exception:
+            pass
+
+    result = await task
+    return result, msg
+
+
+# --- JSON extraction helper ---
+
+def _extract_json(text: str) -> dict | None:
+    """Extract JSON object from Claude response (handles markdown fences, extra text)."""
+    if not text:
+        return None
+    text = text.strip()
+
+    # Try stripping markdown fences
+    if "```" in text:
+        parts = text.split("```")
+        for part in parts:
+            cleaned = part.strip().removeprefix("json").strip()
+            try:
+                return json.loads(cleaned)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+    # Try finding raw JSON object
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return None
+
+
+# --- Render intent plan for Telegram ---
+
+def _render_intent_plan(data: dict) -> str:
+    """Render a new intent plan as a readable Telegram message."""
+    lines = []
+
+    title = data.get("title", "Новая цель")
+    priority = data.get("priority", "P3")
+    deadline = data.get("deadline", "—")
+    success = data.get("success", "")
+    methodology = data.get("methodology", "")
+    reasoning = data.get("reasoning", "")
+
+    lines.append(f"🎯 {title}")
+    lines.append(f"Приоритет: {priority} | Дедлайн: {deadline}")
+    if success:
+        lines.append(f"Критерий успеха: {success}")
+    lines.append("")
+
+    if methodology:
+        lines.append("📋 Метод:")
+        lines.append(methodology)
+        lines.append("")
+
+    goals = data.get("goals", [])
+    if goals:
+        lines.append("🏁 Goals:")
+        for i, g in enumerate(goals, 1):
+            lines.append(f"  {i}. {g.get('title', '?')} — {g.get('progress', '0')}")
+        lines.append("")
+
+    if reasoning:
+        lines.append(f"💡 {reasoning}")
+
+    return "\n".join(lines)
 
 
 def _check_auth(message: Message) -> bool:
@@ -239,6 +374,147 @@ def _is_strategic_change(text: str) -> bool:
     return True
 
 
+async def _handle_new_intent(message: Message, state: FSMContext) -> None:
+    """Handle new intent creation workflow.
+
+    1. Show progress statuses while Claude works
+    2. Parse JSON response
+    3. Show plan with [Accept] [Redo] buttons
+    4. Set FSM state for redo feedback if needed
+    """
+    user_text = message.text or ""
+
+    # Assemble context for the new_intent recipe
+    context = assemble_context("new_intent", user_message=user_text)
+    system_prompt = build_system_prompt(**context)
+
+    # Call Claude with progress updates
+    result, status_msg = await call_claude_with_progress(
+        message.bot, message.chat.id, system_prompt,
+        model="sonnet", recipe="new_intent"
+    )
+
+    if not result:
+        try:
+            await status_msg.edit_text("❌ Claude не ответил. Попробуй позже.")
+        except Exception:
+            await message.answer("❌ Claude не ответил. Попробуй позже.")
+        return
+
+    # Parse JSON from response
+    data = _extract_json(result)
+
+    if not data or "intent_id" not in data:
+        # Claude didn't return valid JSON — show raw response
+        logger.warning(f"[new_intent] Failed to parse JSON from response: {result[:200]}")
+        try:
+            await status_msg.edit_text(
+                f"Не удалось разобрать план. Вот что Claude ответил:\n\n{result[:3000]}"
+            )
+        except Exception:
+            await message.answer(f"Вот что получилось:\n\n{result[:3000]}")
+        return
+
+    # Render the plan
+    plan_text = _render_intent_plan(data)
+
+    # Build accept/redo buttons
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="👍 Принять", callback_data="intent:accept"),
+        InlineKeyboardButton(text="💬 Переделать", callback_data="intent:redo"),
+    ]])
+
+    # Delete status message, send plan as new message
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    await message.answer(plan_text, reply_markup=kb)
+
+    # Save plan data in FSM state for accept/redo handlers
+    await state.update_data(
+        pending_intent=data,
+        original_request=user_text,
+    )
+
+    # Save to memory
+    add_to_memory("user", user_text)
+    add_to_memory("bot", f"[NEW INTENT] {data.get('title', '?')}")
+
+
+async def _handle_intent_redo(message: Message, state: FSMContext) -> None:
+    """Handle intent redo: user said what they didn't like, call Claude again."""
+    feedback = message.text or ""
+    fsm_data = await state.get_data()
+
+    original_request = fsm_data.get("original_request", "")
+    previous_plan = fsm_data.get("pending_intent", {})
+
+    # Build redo prompt with context
+    redo_extra = {
+        "user_message": (
+            f"Первоначальный запрос: {original_request}\n\n"
+            f"Предыдущий план (юзеру не понравился):\n"
+            f"{json.dumps(previous_plan, ensure_ascii=False, indent=2)}\n\n"
+            f"Обратная связь: {feedback}\n\n"
+            f"Переделай план с учётом обратной связи."
+        ),
+    }
+
+    context = assemble_context("new_intent", **redo_extra)
+    system_prompt = build_system_prompt(**context)
+
+    # Call Claude with progress
+    result, status_msg = await call_claude_with_progress(
+        message.bot, message.chat.id, system_prompt,
+        model="sonnet", recipe="new_intent_redo"
+    )
+
+    if not result:
+        try:
+            await status_msg.edit_text("❌ Claude не ответил. Попробуй ещё раз.")
+        except Exception:
+            await message.answer("❌ Claude не ответил. Попробуй ещё раз.")
+        await state.clear()
+        return
+
+    data = _extract_json(result)
+
+    if not data or "intent_id" not in data:
+        logger.warning(f"[new_intent_redo] Failed to parse JSON: {result[:200]}")
+        try:
+            await status_msg.edit_text(
+                f"Не удалось разобрать план:\n\n{result[:3000]}"
+            )
+        except Exception:
+            await message.answer(f"Вот что получилось:\n\n{result[:3000]}")
+        await state.clear()
+        return
+
+    plan_text = _render_intent_plan(data)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="👍 Принять", callback_data="intent:accept"),
+        InlineKeyboardButton(text="💬 Переделать", callback_data="intent:redo"),
+    ]])
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    await message.answer(plan_text, reply_markup=kb)
+
+    # Update FSM with new plan
+    await state.update_data(
+        pending_intent=data,
+        original_request=original_request,
+    )
+    # Clear the redo-waiting state (back to idle, but with data)
+    await state.set_state(None)
+
+
 async def _handle_goal_change(message: Message, intent: Intent) -> None:
     """Handle goal change requests.
 
@@ -332,6 +608,114 @@ async def on_drift_reason(callback: CallbackQuery):
         pass
 
 
+# --- New Intent: Accept / Redo callbacks ---
+
+@router.callback_query(F.data == "intent:accept")
+async def on_intent_accept(callback: CallbackQuery, state: FSMContext):
+    """Accept the proposed intent plan — save to intents.yaml + goals.yaml."""
+    fsm_data = await state.get_data()
+    pending = fsm_data.get("pending_intent")
+
+    if not pending:
+        await callback.answer("Нет данных для сохранения")
+        return
+
+    await callback.answer("✅ Сохраняю...")
+
+    intent_id = pending.get("intent_id", "new-intent")
+    now_iso = datetime.now().isoformat()
+
+    # Build intent entry for intents.yaml
+    intent_entry = {
+        "id": intent_id,
+        "title": pending.get("title", "Новая цель"),
+        "priority": pending.get("priority", "P3"),
+        "deadline": pending.get("deadline"),
+        "success": pending.get("success", ""),
+        "methodology": pending.get("methodology", ""),
+        "goals": [],
+    }
+
+    # Build goal entries
+    goal_entries = []
+    for g in pending.get("goals", []):
+        goal_id = g.get("id", "goal")
+        intent_entry["goals"].append({
+            "id": goal_id,
+            "title": g.get("title", "?"),
+            "progress": g.get("progress", "0"),
+            "updated_at": now_iso,
+            "updated_by": "telegram",
+        })
+        goal_entries.append({
+            "id": f"{intent_id}/{goal_id}",
+            "intent": intent_id,
+            "title": g.get("title", "?"),
+            "progress": g.get("progress", "0"),
+            "updated_at": now_iso,
+            "updated_by": "telegram",
+        })
+
+    # Save to intents.yaml
+    intents_data = load_yaml("intents.yaml")
+    if "intents" not in intents_data:
+        intents_data["intents"] = []
+    intents_data["intents"].append(intent_entry)
+    await save_yaml("intents.yaml", intents_data)
+
+    # Save to goals.yaml
+    goals_data = load_yaml("goals.yaml")
+    if "goals" not in goals_data:
+        goals_data["goals"] = []
+    goals_data["goals"].extend(goal_entries)
+    await save_yaml("goals.yaml", goals_data)
+
+    logger.info(f"[new_intent] Saved intent '{intent_id}' with {len(goal_entries)} goals")
+
+    # Remove buttons from the plan message
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Confirmation
+    title = pending.get("title", "Новая цель")
+    n_goals = len(goal_entries)
+    await callback.message.answer(
+        f"✅ Сохранено: {title}\n"
+        f"Goals: {n_goals}\n"
+        f"Приоритет: {pending.get('priority', 'P3')}\n\n"
+        f"Завтра увидишь задачи в утреннем плане."
+    )
+
+    # Clear FSM
+    await state.clear()
+
+
+@router.callback_query(F.data == "intent:redo")
+async def on_intent_redo(callback: CallbackQuery, state: FSMContext):
+    """User wants to redo the intent plan — ask what to change."""
+    fsm_data = await state.get_data()
+    pending = fsm_data.get("pending_intent")
+
+    if not pending:
+        await callback.answer("Нет данных для переделки")
+        return
+
+    await callback.answer()
+
+    # Remove buttons from the plan message
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await callback.message.answer("💬 Что не нравится? Напиши, что изменить.")
+
+    # Set FSM state: waiting for redo feedback text
+    await state.set_state(NewIntentState.waiting_for_redo_feedback)
+
+
 # --- Partial task: waiting for text ---
 
 @router.message(PartialTaskState.waiting_for_text)
@@ -362,10 +746,21 @@ async def on_partial_text(message: Message, state: FSMContext):
     await state.clear()
 
 
+# --- New Intent: waiting for redo feedback ---
+
+@router.message(NewIntentState.waiting_for_redo_feedback)
+async def on_intent_redo_feedback(message: Message, state: FSMContext):
+    """Handle redo feedback text for new intent workflow."""
+    if not _check_auth(message):
+        return
+
+    await _handle_intent_redo(message, state)
+
+
 # --- Catch-all: free text ---
 
 @router.message()
-async def on_message(message: Message):
+async def on_message(message: Message, state: FSMContext):
     """Handle any text message not caught by commands/callbacks/FSM."""
     if not message.text:
         return
@@ -376,6 +771,10 @@ async def on_message(message: Message):
     logger.info(f"[message] '{message.text[:50]}' -> {intent.value}")
 
     match intent:
+        case Intent.NEW_INTENT:
+            await _handle_new_intent(message, state)
+            return
+
         case Intent.PLAN:
             # Redirect to /today command logic
             from bot.scheduler.morning import generate_morning_plan

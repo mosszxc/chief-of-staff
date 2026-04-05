@@ -25,6 +25,7 @@ class Intent(enum.Enum):
     INTERVIEW = "interview"
     RECRUITER = "recruiter"
     GOAL_CHANGE = "goal_change"
+    NEW_INTENT = "new_intent"
 
 
 # Model routing: intent -> model
@@ -39,6 +40,7 @@ INTENT_MODEL = {
     Intent.INTERVIEW: "sonnet",
     Intent.RECRUITER: "sonnet",
     Intent.GOAL_CHANGE: "sonnet",
+    Intent.NEW_INTENT: "sonnet",
 }
 
 # Recipe mapping: intent -> recipe file name
@@ -49,6 +51,7 @@ INTENT_RECIPE = {
     Intent.INTERVIEW: "interview_prep",
     Intent.RECRUITER: "recruiter_reply",
     Intent.GOAL_CHANGE: "goal_change",
+    Intent.NEW_INTENT: "new_intent",
 }
 
 # Classification prompt for Haiku
@@ -63,8 +66,11 @@ Categories:
 - DOMAIN — question about strategy/marketing/business domain ("что мы знаем про VSL", "как работают воронки")
 - INTERVIEW — interview preparation ("подготовь к интервью", "как отвечать на вопрос")
 - RECRUITER — recruiter message or reply ("рекрутер написал", "как ответить рекрутеру")
-- GOAL_CHANGE — wants to change/add/drop a goal ("хочу поменять цель", "может лучше в DA", "дропаю")
+- NEW_INTENT — user wants to START something new, learn something, begin a new project ("хочу выучить корейский", "хочу начать бегать", "хочу научиться X", "want to learn", "начну X")
+- GOAL_CHANGE — wants to CHANGE/modify/drop an EXISTING goal ("хочу поменять цель", "может лучше в DA", "дропаю", "поменяй приоритет")
 - CHAT — everything else (general question, conversation)
+
+Important: NEW_INTENT = starting something completely new. GOAL_CHANGE = modifying something that already exists.
 
 Message: "{message}"
 
@@ -105,6 +111,18 @@ def keyword_match(text: str) -> Intent | None:
     # Recruiter keywords
     if any(w in lower for w in ("рекрутер", "recruiter", "hr написал")):
         return Intent.RECRUITER
+
+    # New intent keywords (BEFORE goal_change — "хочу выучить" is new, not change)
+    _new_intent_patterns = [
+        "хочу выучить", "хочу научить", "хочу начать",
+        "хочу освоить", "хочу попробовать", "хочу запустить",
+        "want to learn", "want to start",
+        "начну учить", "начну изучать",
+        "научи меня", "помоги выучить", "помоги освоить",
+    ]
+    if any(p in lower for p in _new_intent_patterns):
+        return Intent.NEW_INTENT
+
     # Goal change keywords
     if any(w in lower for w in ("поменять цель", "дропаю", "хочу поменять", "может лучше")):
         return Intent.GOAL_CHANGE
