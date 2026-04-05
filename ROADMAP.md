@@ -173,7 +173,60 @@ Research сохраняется в Grimoire и переиспользуется.
 
 ---
 
-## Phase 4: Daily Use + Polish (неделя 4+)
+## Phase 4: New Intent Pipeline (неделя 4)
+
+**Outcome:** "хочу выучить X" → 3-шаговый pipeline с checkpoint'ами, не монолит.
+
+### Почему pipeline, не один вызов
+
+```
+Монолит: 5-10 мин ожидания → fake progress → ошибка в ASSESS = всё в мусор
+Pipeline: 3 шага по 10-120 сек → реальный контент → ошибка ловится рано
+```
+
+### Что делаем
+
+```
+Pipeline в Telegram (3 шага с кнопками):
+
+STEP 1: ASSESS (10 сек, haiku)
+  → "Вижу: ты знаешь X, хочешь Y. Время: N мин/день. Верно?"
+  → [👍 Да] [💬 Поправить]
+  Поправить → юзер корректирует → ASSESS обновлён
+
+STEP 2: RESEARCH (60-120 сек, sonnet + web + Grimoire)
+  → "Нашёл 3 подхода: A, B, C. Рекомендую B потому что..."
+  → [👍 Подход B] [💬 Другой]
+  Другой → юзер говорит что хочет → ещё один research вызов
+
+STEP 3: DECOMPOSE + METHOD (30 сек, sonnet)
+  → "План: цель, goals, ежедневно, ограничения"
+  → [👍 Принять] [💬 Переделать]
+  Переделать → ТОЛЬКО шаг 3 (research не повторяется)
+  Принять → сохранить в YAML → завтра в утреннем плане
+```
+
+### Acceptance Criteria
+
+**Must:**
+1. "Хочу X" → ASSESS показывает что бот понял → юзер подтверждает/корректирует
+2. RESEARCH показывает варианты, юзер выбирает подход
+3. DECOMPOSE даёт план с goals → "Принять" сохраняет в YAML
+4. "Переделать" на шаге 3 НЕ повторяет research (только шаг 3)
+
+**Nice-to-have:**
+5. Research results → ingest в Grimoire (cos)
+6. Strategy change ("дропаю цель") → challenge pipeline
+
+### Definition of Done
+```
+"Хочу выучить корейский" → 3 шага в Telegram → intent создан → завтра в плане.
+Каждый шаг: юзер видит реальный контент и может поправить.
+```
+
+---
+
+## Phase 5: Daily Use + Polish (неделя 5+)
 
 **Outcome:** система работает каждый день, улучшается по ходу использования.
 
@@ -197,5 +250,6 @@ Research сохраняется в Grimoire и переиспользуется.
 Потом:      Phase 1 (план + кнопки)          ← Claude Code делает
 Через 5д:   Phase 2 (вечер + чат + Grimoire) ← Claude Code делает
 Через 12д:  Phase 3 (intents + sync)         ← Claude Code делает
-Через 19д:  Phase 4 (daily use + polish)     ← ты используешь, Claude Code чинит
+Через 19д:  Phase 4 (new intent pipeline)     ← Claude Code делает
+Через 24д:  Phase 5 (daily use + polish)     ← ты используешь, Claude Code чинит
 ```
