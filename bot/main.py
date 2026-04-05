@@ -16,6 +16,7 @@ from bot.handlers.callbacks import router as callbacks_router
 from bot.handlers.messages import router as messages_router
 from bot.scheduler.morning import generate_morning_plan
 from bot.scheduler.evening import generate_evening_summary
+from bot.scheduler.drift import check_drift
 
 load_dotenv()
 
@@ -83,7 +84,17 @@ def create_scheduler(bot: Bot) -> AsyncIOScheduler:
             replace_existing=True,
         )
 
-        logger.info(f"Scheduler configured: morning=08:00, evening=22:00 MSK, chat_id={cid}")
+        # Drift check: 15:00 Moscow (weekdays only — checked inside the function)
+        scheduler.add_job(
+            check_drift,
+            trigger=CronTrigger(hour=15, minute=0, timezone="Europe/Moscow"),
+            args=[bot, cid],
+            id="drift_check",
+            name="Drift Check",
+            replace_existing=True,
+        )
+
+        logger.info(f"Scheduler configured: morning=08:00, evening=22:00, drift=15:00 MSK, chat_id={cid}")
 
     return scheduler
 

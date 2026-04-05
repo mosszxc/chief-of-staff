@@ -8,6 +8,8 @@ Two-level routing:
 import enum
 import logging
 
+from bot.claude import call_claude_safe
+
 logger = logging.getLogger("cos.router")
 
 
@@ -39,6 +41,52 @@ INTENT_MODEL = {
     Intent.GOAL_CHANGE: "sonnet",
 }
 
+# Recipe mapping: intent -> recipe file name
+INTENT_RECIPE = {
+    Intent.PLAN: "daily_plan",
+    Intent.CHAT: "free_chat",
+    Intent.DOMAIN: "domain_question",
+    Intent.INTERVIEW: "interview_prep",
+    Intent.RECRUITER: "recruiter_reply",
+    Intent.GOAL_CHANGE: "goal_change",
+}
+
+# Classification prompt for Haiku
+_CLASSIFY_PROMPT = """Classify this Telegram message into ONE category. Reply with ONLY the category name, nothing else.
+
+Categories:
+- COMPLETE — user says they did/finished something ("сделал portfolio", "откликнулся на 5", "закончил", "записал видео")
+- POSTPONE — user wants to skip/delay something ("не буду сегодня", "отложу", "завтра")
+- PLAN — user asks for a plan ("что делать", "план на сегодня")
+- STATUS — user asks about progress ("как дела с целями", "прогресс")
+- ADD_TASK — user wants to add a new task ("добавь задачу", "ещё надо")
+- DOMAIN — question about strategy/marketing/business domain ("что мы знаем про VSL", "как работают воронки")
+- INTERVIEW — interview preparation ("подготовь к интервью", "как отвечать на вопрос")
+- RECRUITER — recruiter message or reply ("рекрутер написал", "как ответить рекрутеру")
+- GOAL_CHANGE — wants to change/add/drop a goal ("хочу поменять цель", "может лучше в DA", "дропаю")
+- CHAT — everything else (general question, conversation)
+
+Message: "{message}"
+
+Category:"""
+
+
+async def _llm_classify(text: str) -> Intent:
+    """Level 2: Use Haiku to classify ambiguous text."""
+    prompt = _CLASSIFY_PROMPT.format(message=text[:500])
+    result = await call_claude_safe(prompt, model="haiku", timeout=30, recipe="router")
+
+    if result:
+        category = result.strip().upper().replace(" ", "_")
+        # Try to match to enum
+        for intent in Intent:
+            if intent.value.upper() == category or intent.name == category:
+                logger.info(f"[router] LLM -> {intent.value}")
+                return intent
+
+    logger.info(f"[router] LLM unrecognized '{result}' -> CHAT")
+    return Intent.CHAT
+
 
 def keyword_match(text: str) -> Intent | None:
     """Level 1: Python keyword matching. Returns None if ambiguous."""
@@ -48,10 +96,18 @@ def keyword_match(text: str) -> Intent | None:
         return Intent.PLAN
     if lower in ("статус", "status", "прогресс"):
         return Intent.STATUS
-    if any(w in lower for w in ("сделал", "готово", "done", "выполнил")):
-        return Intent.COMPLETE
     if any(w in lower for w in ("завтра", "отложить", "skip", "postpone")):
         return Intent.POSTPONE
+
+    # Interview keywords
+    if any(w in lower for w in ("интервью", "собеседовани", "interview")):
+        return Intent.INTERVIEW
+    # Recruiter keywords
+    if any(w in lower for w in ("рекрутер", "recruiter", "hr написал")):
+        return Intent.RECRUITER
+    # Goal change keywords
+    if any(w in lower for w in ("поменять цель", "дропаю", "хочу поменять", "может лучше")):
+        return Intent.GOAL_CHANGE
 
     return None
 
@@ -67,6 +123,5 @@ async def route_message(text: str) -> Intent:
         logger.info(f"[router] keyword -> {intent.value}")
         return intent
 
-    # Level 2: LLM classification (placeholder -- Phase 2)
-    logger.info(f"[router] fallback -> CHAT")
-    return Intent.CHAT
+    # Level 2: LLM classification
+    return await _llm_classify(text)
