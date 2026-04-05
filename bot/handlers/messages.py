@@ -354,11 +354,12 @@ async def _execute_recipe(message: Message, intent: Intent) -> None:
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
 
     # Recipe-specific context enrichment
-    extra = {"user_message": message.text}
+    user_text = message.text or ""
+    extra = {"user_message": user_text}
 
     # Grimoire RAG for domain/interview recipes
     if intent in (Intent.DOMAIN, Intent.INTERVIEW):
-        grimoire_data = await grimoire_retrieve(message.text)
+        grimoire_data = await grimoire_retrieve(user_text)
         if grimoire_data:
             extra["grimoire_results"] = grimoire_data
 
@@ -389,7 +390,7 @@ async def _execute_recipe(message: Message, intent: Intent) -> None:
         response = f"**{indicator}.**\n\n{response}"
 
     # Save to conversation memory
-    add_to_memory("user", message.text)
+    add_to_memory("user", message.text or "")
     add_to_memory("bot", response[:500])
 
     # Send response (split if too long for Telegram)
