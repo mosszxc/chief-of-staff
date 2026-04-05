@@ -255,7 +255,35 @@ Web search + Claude = тысячи токенов, 60+ сек
 
 ---
 
-## Phase 5: Daily Use + Polish (неделя 5+)
+## Phase 5: Voice Input (неделя 5)
+
+**Outcome:** говорю голосом в Telegram, бот транскрибирует и обрабатывает как текст.
+
+### Что делаем
+```
+bot/handlers/voice.py  — скачать .ogg → faster-whisper → текст → router
+pyproject.toml         — добавить faster-whisper
+bot/main.py            — зарегистрировать voice handler
+```
+
+### Acceptance Criteria
+
+**Must:**
+1. Голосовое сообщение → транскрипт показан ("🎤 текст") → обработано как текст
+2. "Сделал portfolio" голосом = то же что текстом
+3. Whisper модель: large-v3, GPU (паттерн из Grimoire)
+
+**Nice-to-have:**
+4. Singleton model cache (не перезагружать модель каждый раз)
+
+### Definition of Done
+```
+Говорю голосом → бот понимает → реагирует как на текст.
+```
+
+---
+
+## Phase 6: Daily Use + Polish (неделя 6+)
 
 **Outcome:** система работает каждый день, улучшается по ходу использования.
 
@@ -275,10 +303,11 @@ Web search + Claude = тысячи токенов, 60+ сек
 ## Timeline
 
 ```
-Сейчас:     Phase 0 (prerequisites)         ← 30 мин руками
-Потом:      Phase 1 (план + кнопки)          ← Claude Code делает
-Через 5д:   Phase 2 (вечер + чат + Grimoire) ← Claude Code делает
-Через 12д:  Phase 3 (intents + sync)         ← Claude Code делает
-Через 19д:  Phase 4 (new intent pipeline)     ← Claude Code делает
-Через 24д:  Phase 5 (daily use + polish)     ← ты используешь, Claude Code чинит
+Phase 0: prerequisites               ← done
+Phase 1: план + кнопки               ← done
+Phase 2: вечер + чат + Grimoire      ← done
+Phase 3: intents + sync + patterns   ← done
+Phase 4: new intent pipeline         ← done
+Phase 5: voice input (whisper)       ← next
+Phase 6: daily use + polish          ← ongoing
 ```
