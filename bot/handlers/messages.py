@@ -1301,16 +1301,6 @@ async def on_decompose_redo_feedback(message: Message, state: FSMContext):
 
 async def process_text(text: str, message: Message, state: FSMContext):
     """Process text through router. Called by on_message AND voice handler."""
-
-
-@router.message()
-async def on_message(message: Message, state: FSMContext):
-    """Catch-all: route typed text through process_text."""
-    if not message.text:
-        return
-    if not _check_auth(message):
-        return
-    await process_text(message.text, message, state)
     intent = await route_message(text)
     logger.info(f"[message] '{text[:50]}' -> {intent.value}")
 
@@ -1376,3 +1366,13 @@ async def on_message(message: Message, state: FSMContext):
         case _:
             # All other intents: execute recipe
             await _execute_recipe(message, intent)
+
+
+@router.message()
+async def on_message(message: Message, state: FSMContext):
+    """Catch-all: route typed text through process_text."""
+    if not message.text:
+        return
+    if not _check_auth(message):
+        return
+    await process_text(message.text, message, state)
