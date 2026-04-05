@@ -76,11 +76,12 @@ handlers/commands   — /start (onboarding), /today, /debug
 | 8 | /today → план на сегодня (если нет — генерирует) | Вызвать до 08:00 |
 | 9 | /debug → последний вызов claude (recipe, время) | Вызвать после любого действия |
 | 10 | Claude timeout → fallback сообщение | Поставить timeout=1 → проверить |
+| 11 | 3 быстрых нажатия кнопок подряд → данные не теряются (asyncio.Lock) | Нажать ✅ ✅ ⏭ за 2 сек → проверить все 3 записались в YAML |
 
 ### Definition of Done
 ```
 Утром пришёл план → нажал кнопки → YAML обновился → /debug показывает что произошло.
-Можно пользоваться каждый день.
+Можно пользоваться каждый день. Race condition при быстрых нажатиях не теряет данные.
 ```
 
 ---
@@ -141,15 +142,20 @@ handlers/messages    — goal_change → challenge → redirect to Claude Code
 | 5 | Новый intent появился в утреннем плане | Создать вечером → проверить утром |
 | 6 | Задача отложена 3+ раз → бот предлагает другой формат | Откладывать одну задачу 3 дня |
 | 7 | "Может в DA?" → challenge с данными из стратегии | Написать → проверить что не соглашается сразу |
-| 8 | Research results → ingest в Grimoire (cos) | Создать intent → проверить что данные в cos |
-| 9 | TTL warning если данные устарели | Подождать TTL → спросить ту же тему |
-| 10 | asyncio.Lock не даёт race condition на YAML | Нажать 3 кнопки быстро подряд |
+| 8 | Research → LLM extract facts → validate → add metadata → ingest в cos | Создать intent → проверить в Grimoire: entities есть, metadata (researched_at, ttl_days) заполнена |
+| 9 | TTL warning если данные устарели | Установить ttl_days=1 на тестовый факт → на следующий день спросить → увидеть warning |
+| 10 | Multi-domain research: ASSESS определяет домены → targeted search по каждому → один синтез | Создать intent "работа в Корее" → проверить что searches: рынок + виза + интервью + LinkedIn |
+| 11 | Intent iteration: "не нравится метод, хочу через сериалы" → Claude Code пересматривает | В CC workflow сказать "нет, переделай" → methodology обновился |
+| 12 | Strategy pivot: "дропаю поиск работы" → challenge с полным контекстом стратегии | Написать в Telegram → redirect в CC → CC загрузил стратегию + progress + constraints → challenge |
+| 13 | Re-research trigger: TTL истёк + пользователь запросил тему → автоматический web search | Факт с ttl=1 → на следующий день "что мы знаем про X?" → бот дополняет из веба |
 
 ### Definition of Done
 ```
 Два интерфейса (Telegram + Claude Code) видят одни данные.
-Новые цели создаются через workflow. Паттерны (avoidance, drift) работают.
-Знания из research сохраняются в Grimoire и переиспользуются.
+Новые цели создаются через workflow. Workflow итеративный — можно оспорить любой шаг.
+Strategy pivot работает с challenge. Паттерны (avoidance, drift) работают.
+Research → pre-process → ingest в Grimoire с metadata + TTL.
+Устаревшие данные помечаются, re-research triggered автоматически.
 ```
 
 ---
