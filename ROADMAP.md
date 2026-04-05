@@ -187,35 +187,62 @@ Pipeline: 3 шага по 10-120 сек → реальный контент → 
 ### Что делаем
 
 ```
+bot/context.py       — check_knowledge_coverage() + knowledge reuse engine
+bot/handlers/messages — pipeline FSM (3 шага с checkpoint'ами)
+recipes/assess.md    — промпт для ASSESS (определить домены)
+recipes/research.md  — промпт для RESEARCH (только пробелы)
+recipes/decompose.md — промпт для DECOMPOSE+METHOD
+```
+
+```
 Pipeline в Telegram (3 шага с кнопками):
 
-STEP 1: ASSESS (10 сек, haiku)
-  → "Вижу: ты знаешь X, хочешь Y. Время: N мин/день. Верно?"
-  → [👍 Да] [💬 Поправить]
-  Поправить → юзер корректирует → ASSESS обновлён
+STEP 1: ASSESS + KNOWLEDGE CHECK (10 сек, haiku + Grimoire HTTP)
+  → Определить домены: [юридика, финансы, маркетинг, ...]
+  → check_knowledge_coverage(): проверить Grimoire (0 токенов)
+  → Показать юзеру:
+    "Для этой цели нужны:
+     ✅ Маркетинг — есть в базе (50+ entities)
+     ❌ Продукт — нужен ресёрч
+     ⚠️ Юридика — устарело, обновлю
+     Верно? [👍 Да] [💬 Поправить]"
 
-STEP 2: RESEARCH (60-120 сек, sonnet + web + Grimoire)
-  → "Нашёл 3 подхода: A, B, C. Рекомендую B потому что..."
+STEP 2: RESEARCH (60-120 сек, sonnet + web) — ТОЛЬКО пробелы
+  → Ресёрчит ТОЛЬКО домены с ❌ и ⚠️
+  → Existing knowledge (✅) подтягивается из Grimoire без ресёрча
+  → Новые знания → ingest в cos
+  → "Нашёл 3 подхода: A, B, C. Рекомендую B."
   → [👍 Подход B] [💬 Другой]
-  Другой → юзер говорит что хочет → ещё один research вызов
 
 STEP 3: DECOMPOSE + METHOD (30 сек, sonnet)
-  → "План: цель, goals, ежедневно, ограничения"
+  → existing (Grimoire) + new research → один план
   → [👍 Принять] [💬 Переделать]
-  Переделать → ТОЛЬКО шаг 3 (research не повторяется)
-  Принять → сохранить в YAML → завтра в утреннем плане
+  Переделать → ТОЛЬКО шаг 3
+  Принять → сохранить + сразу новый план дня
+```
+
+### Knowledge Reuse Engine
+
+```
+Grimoire check = HTTP, 0 токенов, <100ms
+Web search + Claude = тысячи токенов, 60+ сек
+
+1-й intent:  5 доменов × 0 в базе = 5 ресёрчей
+5-й intent:  5 доменов × 4 в базе = 1 ресёрч (экономия 80%)
+
+Знания НАКАПЛИВАЮТСЯ → каждый intent быстрее и дешевле.
 ```
 
 ### Acceptance Criteria
 
 **Must:**
-1. "Хочу X" → ASSESS показывает что бот понял → юзер подтверждает/корректирует
-2. RESEARCH показывает варианты, юзер выбирает подход
-3. DECOMPOSE даёт план с goals → "Принять" сохраняет в YAML
-4. "Переделать" на шаге 3 НЕ повторяет research (только шаг 3)
+1. ASSESS показывает домены + coverage (✅/❌/⚠️) → юзер подтверждает
+2. RESEARCH ресёрчит ТОЛЬКО пробелы, existing берёт из Grimoire
+3. DECOMPOSE собирает всё → план → "Принять" сохраняет + новый план сразу
+4. "Переделать" на шаге 3 НЕ повторяет research
 
 **Nice-to-have:**
-5. Research results → ingest в Grimoire (cos)
+5. Research results → auto-ingest в Grimoire (cos) с TTL
 6. Strategy change ("дропаю цель") → challenge pipeline
 
 ### Definition of Done
