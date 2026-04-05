@@ -257,6 +257,149 @@ async def _retrieve_from_project(client: httpx.AsyncClient, project: str, query:
         return None
 
 
+# Minimum entity count to consider an area "covered" in Grimoire.
+# RAG semantic search always returns closest matches, even if irrelevant.
+# We need at least a few entities with actual content to trust the coverage.
+_MIN_ENTITIES_FOR_COVERAGE = 3
+# Minimum chunks for coverage (chunks contain the actual source text)
+_MIN_CHUNKS_FOR_COVERAGE = 1
+
+
+async def _check_project_coverage(client: httpx.AsyncClient, project: str, area: str) -> dict | None:
+    """Check if a Grimoire project has meaningful coverage for an area.
+
+    Returns dict with {entities, chunks, data} if covered, None if not.
+    Uses raw API response to count entities/chunks before deciding.
+    """
+    try:
+        resp = await client.post(
+            f"{GRIMOIRE_API_URL}/api/projects/{project}/retrieve",
+            json={"query": area, "mode": "hybrid"},
+        )
+        if resp.status_code != 200:
+            return None
+
+        raw = resp.json()
+        n_entities = len(raw.get("entities", []))
+        n_chunks = len(raw.get("chunks", []))
+
+        # Check minimum thresholds — RAG always returns "closest" results,
+        # so we need enough entities/chunks to trust it's actually relevant
+        if n_entities < _MIN_ENTITIES_FOR_COVERAGE and n_chunks < _MIN_CHUNKS_FOR_COVERAGE:
+            logger.debug(f"[coverage/{project}] '{area}': below threshold (ent={n_entities}, chunks={n_chunks})")
+            return None
+
+        # Format the data for downstream use
+        data = await _retrieve_from_project(client, project, area)
+        if not data:
+            return None
+
+        return {
+            "entities": n_entities,
+            "chunks": n_chunks,
+            "data": data,
+        }
+
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError):
+        return None
+    except Exception as e:
+        logger.warning(f"[coverage/{project}] error for '{area}': {e}")
+        return None
+
+
+async def check_knowledge_coverage(areas: list[str]) -> dict:
+    """Check which knowledge areas are covered in Grimoire.
+
+    For each area, queries both rubick and cos projects.
+    Returns dict of area -> {status, source, needs_research, data}.
+
+    Status:
+      "ok"      - has meaningful knowledge (enough entities/chunks)
+      "expired" - has knowledge, but TTL expired (needs refresh)
+      "missing" - no meaningful knowledge found (needs full research)
+    """
+    coverage = {}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for area in areas:
+                rubick_result = None
+                cos_result = None
+
+                # Query both projects
+                try:
+                    rubick_result = await _check_project_coverage(client, "rubick", area)
+                except Exception as e:
+                    logger.warning(f"[coverage/rubick] error for '{area}': {e}")
+
+                try:
+                    cos_result = await _check_project_coverage(client, "cos", area)
+                except Exception as e:
+                    logger.warning(f"[coverage/cos] error for '{area}': {e}")
+
+                has_knowledge = bool(rubick_result) or bool(cos_result)
+
+                # TTL check placeholder — proper TTL needs doc metadata from Grimoire
+                ttl_ok = True
+
+                if has_knowledge and ttl_ok:
+                    status = "ok"
+                elif has_knowledge and not ttl_ok:
+                    status = "expired"
+                else:
+                    status = "missing"
+
+                # Pick the best source (prefer the one with more data)
+                if rubick_result and cos_result:
+                    # Both have data — pick the one with more entities
+                    if rubick_result["entities"] >= cos_result["entities"]:
+                        source = "rubick"
+                        data = rubick_result["data"]
+                    else:
+                        source = "cos"
+                        data = cos_result["data"]
+                elif rubick_result:
+                    source = "rubick"
+                    data = rubick_result["data"]
+                elif cos_result:
+                    source = "cos"
+                    data = cos_result["data"]
+                else:
+                    source = None
+                    data = None
+
+                coverage[area] = {
+                    "status": status,
+                    "source": source,
+                    "needs_research": status != "ok",
+                    "data": data,
+                }
+
+                logger.info(f"[coverage] '{area}' -> {status} (source={source})")
+
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        # Grimoire is offline — mark all areas as missing (graceful fallback)
+        logger.warning(f"[coverage] Grimoire unavailable: {e} — all areas marked as missing")
+        for area in areas:
+            coverage[area] = {
+                "status": "missing",
+                "source": None,
+                "needs_research": True,
+                "data": None,
+            }
+    except Exception as e:
+        logger.warning(f"[coverage] unexpected error: {e} — all areas marked as missing")
+        for area in areas:
+            coverage[area] = {
+                "status": "missing",
+                "source": None,
+                "needs_research": True,
+                "data": None,
+            }
+
+    return coverage
+
+
 async def grimoire_retrieve(query: str, project: str = "auto") -> str | None:
     """Retrieve from Grimoire knowledge base with dual-project routing.
 
