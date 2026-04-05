@@ -3,19 +3,33 @@
 import asyncio
 import logging
 import os
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
 from bot.handlers.commands import router as commands_router
 from bot.handlers.callbacks import router as callbacks_router
 from bot.handlers.messages import router as messages_router
+from bot.scheduler.morning import generate_morning_plan
+from bot.scheduler.evening import generate_evening_summary
 
 load_dotenv()
+
+# Setup logging
+LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_DIR / "cos.log", encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger("cos")
 
@@ -29,21 +43,65 @@ def create_bot() -> Bot:
 
 
 def create_dispatcher() -> Dispatcher:
-    """Create dispatcher and register routers."""
-    dp = Dispatcher()
+    """Create dispatcher with FSM storage and register routers."""
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
     dp.include_router(commands_router)
     dp.include_router(callbacks_router)
     dp.include_router(messages_router)
     return dp
 
 
+def create_scheduler(bot: Bot) -> AsyncIOScheduler:
+    """Create APScheduler with morning and evening cron jobs."""
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not chat_id:
+        logger.warning("TELEGRAM_CHAT_ID not set -- scheduler jobs won't have a target")
+
+    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+
+    if chat_id:
+        cid = int(chat_id)
+
+        # Morning plan: 08:00 Moscow
+        scheduler.add_job(
+            generate_morning_plan,
+            trigger=CronTrigger(hour=8, minute=0, timezone="Europe/Moscow"),
+            args=[bot, cid],
+            id="morning_plan",
+            name="Morning Plan",
+            replace_existing=True,
+        )
+
+        # Evening summary: 22:00 Moscow
+        scheduler.add_job(
+            generate_evening_summary,
+            trigger=CronTrigger(hour=22, minute=0, timezone="Europe/Moscow"),
+            args=[bot, cid],
+            id="evening_summary",
+            name="Evening Summary",
+            replace_existing=True,
+        )
+
+        logger.info(f"Scheduler configured: morning=08:00, evening=22:00 MSK, chat_id={cid}")
+
+    return scheduler
+
+
 async def main():
-    """Start bot polling."""
+    """Start bot polling with scheduler."""
     bot = create_bot()
     dp = create_dispatcher()
+    scheduler = create_scheduler(bot)
 
-    logger.info("Chief of Staff starting...")
-    await dp.start_polling(bot)
+    scheduler.start()
+    logger.info("Chief of Staff starting... (scheduler active)")
+
+    try:
+        await dp.start_polling(bot)
+    finally:
+        scheduler.shutdown()
+        logger.info("Scheduler shut down")
 
 
 if __name__ == "__main__":
