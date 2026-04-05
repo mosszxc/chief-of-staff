@@ -678,18 +678,22 @@ async def on_intent_accept(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
 
-    # Confirmation
+    # Confirmation + regenerate plan immediately
     title = pending.get("title", "Новая цель")
     n_goals = len(goal_entries)
     await callback.message.answer(
         f"✅ Сохранено: {title}\n"
         f"Goals: {n_goals}\n"
         f"Приоритет: {pending.get('priority', 'P3')}\n\n"
-        f"Завтра увидишь задачи в утреннем плане."
+        f"⏳ Обновляю план на сегодня..."
     )
 
     # Clear FSM
     await state.clear()
+
+    # Regenerate today's plan with new intent included
+    from bot.scheduler.morning import generate_morning_plan
+    await generate_morning_plan(callback.bot, callback.message.chat.id)
 
 
 @router.callback_query(F.data == "intent:redo")
