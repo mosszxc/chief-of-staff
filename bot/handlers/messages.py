@@ -463,7 +463,8 @@ async def _pipeline_step1_assess(message: Message, state: FSMContext) -> None:
 
     status_msg = await message.answer("🔍 Определяю области знаний...")
 
-    result = await call_claude_safe(assess_prompt, model="haiku", timeout=45, recipe="assess")
+    # Sonnet for ASSESS — strategic decision (which areas to research), not simple classification
+    result = await call_claude_safe(assess_prompt, model="sonnet", timeout=120, recipe="assess")
 
     if not result:
         try:

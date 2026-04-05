@@ -195,12 +195,17 @@ recipes/decompose.md — промпт для DECOMPOSE+METHOD
 ```
 
 ```
-Pipeline в Telegram (3 шага с кнопками):
+Pipeline в Telegram (4 шага с checkpoint'ами):
 
-STEP 1: ASSESS + KNOWLEDGE CHECK (10 сек, haiku + Grimoire HTTP)
-  Часть A: Claude определяет ОБЛАСТИ ЗНАНИЙ для цели (не домены, не запросы)
-    "Для бизнеса: продукт, финансы, маркетинг, юридика, продажи"
-  Часть B: check_knowledge_coverage() → Grimoire semantic search по каждой области
+STEP 0: CLARIFY (5-10 сек, sonnet)
+  Claude генерирует 2-4 уточняющих вопроса под тип цели (нельзя захардкодить)
+  Юзер отвечает → контекст передаётся в ASSESS
+  → Без уточнений ASSESS работает generic ("юридика" vs "регистрация ИП в РФ")
+
+STEP 1: ASSESS + KNOWLEDGE CHECK (10-20 сек, sonnet + Grimoire HTTP)
+  Часть A: Claude определяет ОБЛАСТИ ЗНАНИЙ с учётом уточнений
+    Не "юридика" а "регистрация ИП/самозанятость в РФ"
+  Часть B: check_knowledge_coverage() → Grimoire semantic search + LLM relevance validation
   Часть C: Показать юзеру ✅/❌/⚠️ + "Пропустил что-то? [👍 Ок] [💬 Добавить]"
   → Юзер может добавить/убрать области → checkpoint перед ресёрчем
 

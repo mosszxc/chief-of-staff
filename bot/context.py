@@ -265,11 +265,37 @@ _MIN_ENTITIES_FOR_COVERAGE = 3
 _MIN_CHUNKS_FOR_COVERAGE = 1
 
 
+async def _validate_relevance(area: str, entities: list[str]) -> bool:
+    """LLM-validate that Grimoire entities are actually relevant to the area.
+
+    RAG semantic search returns closest matches even if irrelevant.
+    Haiku checks: do these entities contain knowledge about this area?
+    Cost: ~$0.0001 per call.
+    """
+    from bot.claude import call_claude_safe
+
+    entities_str = ", ".join(entities[:15])  # max 15 to keep prompt short
+    prompt = (
+        f"Вопрос: содержат ли эти сущности из базы знаний реальную информацию "
+        f"по теме \"{area}\"?\n\n"
+        f"Сущности: {entities_str}\n\n"
+        f"Ответь ОДНИМ словом: ДА или НЕТ. "
+        f"ДА = сущности действительно про эту тему. "
+        f"НЕТ = сущности про другое, просто похожие слова."
+    )
+    result = await call_claude_safe(prompt, model="haiku", recipe="relevance_check")
+    if result is None:
+        return True  # fallback: trust threshold if LLM unavailable
+    return "ДА" in result.upper()
+
+
 async def _check_project_coverage(client: httpx.AsyncClient, project: str, area: str) -> dict | None:
     """Check if a Grimoire project has meaningful coverage for an area.
 
     Returns dict with {entities, chunks, data} if covered, None if not.
-    Uses raw API response to count entities/chunks before deciding.
+    Two-stage validation:
+      1. Threshold check (entity/chunk count)
+      2. LLM relevance check (Haiku validates entities are actually about this topic)
     """
     try:
         resp = await client.post(
@@ -280,13 +306,20 @@ async def _check_project_coverage(client: httpx.AsyncClient, project: str, area:
             return None
 
         raw = resp.json()
-        n_entities = len(raw.get("entities", []))
+        entities = raw.get("entities", [])
+        n_entities = len(entities)
         n_chunks = len(raw.get("chunks", []))
 
-        # Check minimum thresholds — RAG always returns "closest" results,
-        # so we need enough entities/chunks to trust it's actually relevant
+        # Stage 1: threshold check
         if n_entities < _MIN_ENTITIES_FOR_COVERAGE and n_chunks < _MIN_CHUNKS_FOR_COVERAGE:
             logger.debug(f"[coverage/{project}] '{area}': below threshold (ent={n_entities}, chunks={n_chunks})")
+            return None
+
+        # Stage 2: LLM relevance validation
+        entity_names = [e.get("name", e) if isinstance(e, dict) else str(e) for e in entities[:15]]
+        is_relevant = await _validate_relevance(area, entity_names)
+        if not is_relevant:
+            logger.info(f"[coverage/{project}] '{area}': threshold passed but LLM says NOT relevant")
             return None
 
         # Format the data for downstream use
