@@ -107,12 +107,7 @@ async def on_voice(message: Message, state: FSMContext):
             await message.reply("Не удалось распознать речь")
             return
 
-        # 3. Show transcript
-        # Escape markdown special chars in transcript to avoid parse errors
-        safe_text = text.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
-        await message.reply(f"🎤 _{safe_text}_", parse_mode="Markdown")
-
-        # 4. Route through the same pipeline as text messages
+        # 3. Route through the same pipeline as text messages
         from bot.handlers.messages import process_text
         logger.info(f"Routing voice text to process_text: '{text[:50]}'")
         await process_text(text, message, state)
