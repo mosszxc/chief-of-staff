@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from bot.handlers.commands import router as commands_router
 from bot.handlers.callbacks import router as callbacks_router
+from bot.handlers.voice import router as voice_router
 from bot.handlers.messages import router as messages_router
 from bot.scheduler.morning import generate_morning_plan
 from bot.scheduler.evening import generate_evening_summary
@@ -49,6 +50,7 @@ def create_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=storage)
     dp.include_router(commands_router)
     dp.include_router(callbacks_router)
+    dp.include_router(voice_router)
     dp.include_router(messages_router)
     return dp
 
